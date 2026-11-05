@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Laboratorio de informática: maqueta 3D y AR</title>
+<style>
+:root{--bg:#e9eef5;--panel:#ffffff;--ink:#14202e;--mut:#51637a;--acc:#0a7ea4;--line:#c5d0de;
+ box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1726;--panel:#162338;--ink:#e6edf7;--mut:#93a6bf;--acc:#35c4e8;--line:#2a3b55}}
+:root[data-theme="dark"]{--bg:#0d1726;--panel:#162338;--ink:#e6edf7;--mut:#93a6bf;--acc:#35c4e8;--line:#2a3b55}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 "Segoe UI",system-ui,sans-serif}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+.bar{position:fixed;left:12px;right:12px;top:calc(12px + env(safe-area-inset-top,0px));display:flex;gap:8px;align-items:center;justify-content:space-between;pointer-events:none}
+.bar>*{pointer-events:auto}
+h1{font-size:16px;margin:0;padding:8px 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#ar{display:none;background:var(--acc);color:#04202b;border-color:var(--acc);font-weight:600}
+#card{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:420px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+#card h2{margin:0 0 4px;font-size:17px}
+#card dl{margin:6px 0 0;display:grid;grid-template-columns:auto 1fr;gap:2px 12px}
+#card dt{color:var(--mut)} #card dd{margin:0}
+#card p{margin:0;color:var(--mut)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="bar"><h1>Laboratorio de informática</h1><div><button id="reset">Reiniciar vista</button> <button id="ar">Ver en AR</button></div></div>
+<div id="card"><p>Tocá un equipo para ver sus datos. Arrastrá para girar y usá la rueda o pellizcá para acercar.</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ---- Datos de la topología (editá IPs y puertos reales acá) ----
+const H=Math.PI/2;
+// Disposición en U: brazo izquierdo (PC0-2), pared del fondo (PC3-7), brazo derecho (PC8-10)
+const PCS_POS=[[-3.3,-1.3,H],[-3.3,-2.45,H],[-3.3,-3.6,H],[-2.3,-4.6,0],[-1.15,-4.6,0],[0,-4.6,0],[1.15,-4.6,0],[2.3,-4.6,0],[3.3,-3.6,-H],[3.3,-2.45,-H],[3.3,-1.3,-H]];
+const DEVICES=[
+ {id:"Router0",tipo:"Router",modelo:"Router-PT",x:-3.2,z:1.2,rot:H,ip:null,con:["Switch0","Server0"]},
+ {id:"Switch0",tipo:"Switch",modelo:"Catalyst 2950-24",x:-3.2,z:0,rot:H,ip:null,con:["Router0"]},
+ {id:"Server0",tipo:"Servidor",modelo:"Server-PT",x:3.2,z:0,rot:-H,ip:null,con:["Router0"]}
+];
+PCS_POS.forEach((p,i)=>DEVICES.push({id:"PC"+i,tipo:"PC de escritorio",modelo:"PC-PT",x:p[0],z:p[1],rot:p[2],ip:null,con:["Switch0"],puerto:"Fa0/"+(i+1)}));
+const byId=Object.fromEntries(DEVICES.map(d=>[d.id,d]));
+
+// ---- Escena ----
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const cv=document.getElementById("c");
+const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(50,1,0.1,100);
+const world=new THREE.Group(); scene.add(world);
+scene.add(new THREE.HemisphereLight(0xffffff,0x556677,0.9));
+const sun=new THREE.DirectionalLight(0xffffff,0.6); sun.position.set(4,8,5); scene.add(sun);
+function applyBg(){scene.background=new THREE.Color(css("--bg"));}
+applyBg(); matchMedia("(prefers-color-scheme:dark)").addEventListener("change",applyBg);
+
+const M=(c,e)=>new THREE.MeshStandardMaterial({color:c,roughness:.7,emissive:e||0x000000});
+const box=(w,h,d,m,x,y,z,g)=>{const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y,z);g.add(o);return o;};
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(7.4,10),M(0x2b3d57));
+floor.rotation.x=-Math.PI/2; world.add(floor);
+const grid=new THREE.GridHelper(10,10,0x4d6788,0x3a5070); grid.scale.x=.74; grid.position.y=0.01; world.add(grid);
+const WM=()=>{const m=M(0xdfe6ee);m.transparent=true;m.opacity=.45;m.depthWrite=false;return m;};
+box(7.4,3,.1,WM(),0,1.5,-5,world); box(.1,3,10,WM(),-3.7,1.5,0,world); box(.1,3,10,WM(),3.7,1.5,0,world);
+
+function label(text,y,g){
+  const c=document.createElement("canvas"); c.width=256; c.height=64;
+  const x=c.getContext("2d"); x.fillStyle="rgba(10,20,34,.85)"; x.fillRect(0,0,256,64);
+  x.fillStyle="#e6edf7"; x.font="600 34px sans-serif"; x.textAlign="center"; x.textBaseline="middle"; x.fillText(text,128,34);
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false}));
+  s.scale.set(1.2,.3,1); s.position.y=y; s.renderOrder=5; g.add(s);
+}
+const pick=[];
+function build(d){
+  const g=new THREE.Group(); g.position.set(d.x,0,d.z); g.rotation.y=d.rot||0; g.userData.dev=d; d.node=g;
+  if(d.tipo==="PC de escritorio"){
+    box(1.15,.08,.8,M(0xb98a52),0,.75,0,g);
+    [[-.5,-.35],[.5,-.35],[-.5,.35],[.5,.35]].forEach(p=>box(.06,.75,.06,M(0x6b4d2b),p[0],.37,p[1],g));
+    box(.7,.45,.05,M(0x111111),-.15,1.1,-.15,g);
+    box(.62,.37,.02,M(0x1b4f9c,0x0a2a55),-.15,1.1,-.12,g);
+    box(.12,.2,.05,M(0x111111),-.15,.89,-.15,g);
+    box(.5,.02,.18,M(0x222222),-.15,.8,.15,g);
+    box(.22,.45,.42,M(0x1c1c1c),.45,1.03,-.05,g);
+  }else if(d.tipo==="Switch"){
+    box(1,.9,.7,M(0x3a4658),0,.45,0,g); box(.9,.16,.02,M(0x2fbf71,0x0e4a2a),0,.7,.36,g);
+    for(let i=0;i<12;i++)box(.05,.05,.02,M(0x2fbf71,0x2fbf71),-.45+i*.08,.55,.36,g);
+  }else if(d.tipo==="Router"){
+    box(1,.35,.7,M(0x2a74c9),0,.2,0,g); box(.9,.05,.6,M(0x1d5598),0,.4,0,g);
+  }else{
+    box(.6,1.4,.8,M(0x4a4f57),0,.7,0,g); for(let i=0;i<5;i++)box(.5,.04,.02,M(0x9fb0c5),0,.3+i*.2,.41,g);
+  }
+  label(d.id,d.tipo==="PC de escritorio"?1.7:1.6,g);
+  g.traverse(o=>{if(o.isMesh)pick.push(o);}); world.add(g);
+}
+DEVICES.forEach(build);
+
+// Cables
+function cable(a,b,dashed){
+  const A=new THREE.Vector3(a.x,.12,a.z),B=new THREE.Vector3(b.x,.12,b.z);
+  const len=A.distanceTo(B), m=new THREE.Mesh(new THREE.CylinderGeometry(.025,.025,len,6),M(dashed?0xf2b441:0x35c4e8,dashed?0x5a4010:0x0d4a5c));
+  m.position.copy(A).add(B).multiplyScalar(.5); m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),B.clone().sub(A).normalize());
+  world.add(m);
+}
+DEVICES.filter(d=>d.tipo==="PC de escritorio").forEach(p=>cable(byId.Switch0,p));
+cable(byId.Switch0,byId.Router0); cable(byId.Router0,byId.Server0,true);
+
+// ---- Cámara orbital simple ----
+let yaw=.35,pitch=.8,dist=14;
+const resetView=()=>{yaw=.35;pitch=.8;dist=14;};
+function placeCam(){camera.position.set(Math.sin(yaw)*Math.cos(pitch)*dist,Math.sin(pitch)*dist,Math.cos(yaw)*Math.cos(pitch)*dist);camera.lookAt(0,.5,-1);}
+function resize(){const w=innerWidth,h=innerHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+addEventListener("resize",resize); resize();
+const pts=new Map(); let moved=0,last=0;
+cv.addEventListener("pointerdown",e=>{cv.setPointerCapture(e.pointerId);pts.set(e.pointerId,e);moved=0;last=0;});
+cv.addEventListener("pointermove",e=>{
+  if(!pts.has(e.pointerId))return; const p=pts.get(e.pointerId);
+  if(pts.size===1){yaw-=(e.clientX-p.clientX)*.007;pitch=Math.max(.15,Math.min(1.4,pitch+(e.clientY-p.clientY)*.006));moved+=Math.abs(e.clientX-p.clientX)+Math.abs(e.clientY-p.clientY);}
+  pts.set(e.pointerId,e);
+  if(pts.size===2){const [a,b]=[...pts.values()];const d=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);if(last)dist=Math.max(5,Math.min(28,dist*last/d));last=d;moved=99;}
+});
+const up=e=>{if(pts.size===1&&moved<6)choose(e);pts.delete(e.pointerId);if(pts.size<2)last=0;};
+cv.addEventListener("pointerup",up); cv.addEventListener("pointercancel",e=>pts.delete(e.pointerId));
+cv.addEventListener("wheel",e=>{e.preventDefault();dist=Math.max(5,Math.min(28,dist*(1+e.deltaY*.001)));},{passive:false});
+document.getElementById("reset").onclick=resetView;
+
+// ---- Selección y ficha ----
+const ray=new THREE.Raycaster(), card=document.getElementById("card");
+let sel=null;
+function show(d){
+  if(sel&&sel.node)sel.node.scale.set(1,1,1); sel=d; if(!d)return;
+  d.node.scale.set(1.12,1.12,1.12);
+  const vec=d.con.map(c=>c+(byId[c].tipo==="PC de escritorio"?"":"")).join(", ");
+  card.innerHTML=`<h2>${d.id}</h2><dl><dt>Tipo</dt><dd>${d.tipo}</dd><dt>Modelo</dt><dd>${d.modelo}</dd><dt>IP</dt><dd>${d.ip||"por definir"}</dd>${d.puerto?`<dt>Puerto en Switch0</dt><dd>${d.puerto} (por confirmar)</dd>`:""}<dt>Conectado a</dt><dd>${vec}</dd></dl>`;
+  history.replaceState(null,"","#"+d.id);
+}
+function choose(e){
+  const r=cv.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1),camera);
+  const h=ray.intersectObjects(pick)[0]; if(!h)return;
+  let o=h.object; while(o&&!o.userData.dev)o=o.parent; if(o)show(o.userData.dev);
+}
+function fromHash(){const d=byId[decodeURIComponent(location.hash.slice(1))];if(d)show(d);}
+addEventListener("hashchange",fromHash); fromHash();
+
+// ---- AR (experimental, requiere HTTPS y un navegador con WebXR) ----
+const arBtn=document.getElementById("ar");
+if(navigator.xr){navigator.xr.isSessionSupported("immersive-ar").then(ok=>{if(ok)arBtn.style.display="inline-block";}).catch(()=>{});}
+arBtn.onclick=async()=>{
+  try{
+    const s=await navigator.xr.requestSession("immersive-ar",{optionalFeatures:["local-floor"]});
+    renderer.xr.enabled=true; renderer.xr.setReferenceSpaceType("local"); await renderer.xr.setSession(s);
+    scene.background=null; world.scale.setScalar(.07); world.position.set(0,-.5,-1.4);
+    s.addEventListener("end",()=>{renderer.xr.enabled=false;world.scale.setScalar(1);world.position.set(0,0,0);applyBg();resize();});
+  }catch(err){card.innerHTML="<p>No se pudo iniciar la realidad aumentada en este navegador o dispositivo.</p>";}
+};
+
+renderer.setAnimationLoop(()=>{ if(!renderer.xr.isPresenting)placeCam(); renderer.render(scene,camera); });
+</script>
+</body>
+</html>
