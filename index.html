@@ -16,7 +16,8 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:15px/1
 .bar>*{pointer-events:auto}
 h1{font-size:16px;margin:0;padding:8px 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
 button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
-button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
 #ar{display:none;background:var(--acc);color:#04202b;border-color:var(--acc);font-weight:600}
 #card{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:420px;max-height:45vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
 #card h2{margin:0 0 4px;font-size:17px}
@@ -24,12 +25,14 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #card dt{color:var(--mut)} #card dd{margin:0}
 #card p{margin:0;color:var(--mut)}
 #card .desc{margin-top:8px;color:var(--ink)}
+.vc{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.vc label{color:var(--mut);display:flex;gap:6px;align-items:center}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div class="bar"><h1>Laboratorio de informática</h1><div><button id="reset">Reiniciar vista</button> <button id="ar">Ver en AR</button></div></div>
-<div id="card"><p>Tocá un equipo para ver sus datos. Arrastrá para girar y usá la rueda o pellizcá para acercar.</p></div>
+<div class="bar"><h1>Laboratorio de informática</h1><div><select id="pickSel" aria-label="Elegir equipo"></select> <button id="reset">Reiniciar vista</button> <button id="ar">Ver en AR</button></div></div>
+<div id="card" role="region" aria-label="Información del equipo" aria-live="polite"><p>Tocá un equipo, o elegilo en la lista de arriba, para ver sus datos y escucharlos. Arrastrá para girar y usá la rueda o pellizcá para acercar.</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 // ---- Datos de la topología (editá IPs y puertos reales acá) ----
@@ -127,19 +130,38 @@ document.getElementById("reset").onclick=resetView;
 
 // ---- Selección y ficha ----
 const ray=new THREE.Raycaster(), card=document.getElementById("card");
-let sel=null;
+let sel=null,auto=false;
+const pickSel=document.getElementById("pickSel");
+pickSel.innerHTML='<option value="">Elegir equipo…</option>'+DEVICES.map(d=>'<option value="'+d.id+'">'+d.id+'</option>').join("");
+pickSel.onchange=()=>{const d=byId[pickSel.value];if(d){show(d);if(auto)speak(d);}};
+function textFor(d){
+  const ip=d.ip?d.ip.replace(/\./g," punto "):(d.tipo==="Switch"?"sin I P":"por definir");
+  const pu=d.puerto?"Puerto en el switch: "+d.puerto.replace("Fa0/","Fast Ethernet cero barra ")+". ":"";
+  return d.id+". "+d.tipo+". Modelo "+d.modelo+". Red 192 punto 168 punto 0 punto 0. Dirección I P: "+ip+". "+pu+"Conectado a "+d.con.join(", ")+". "+(d.desc||"");
+}
+function speak(d){
+  if(!("speechSynthesis" in window)){card.insertAdjacentHTML("beforeend","<p>Este navegador no tiene lectura de voz.</p>");return;}
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(textFor(d)); u.lang="es-AR"; u.rate=.95;
+  const vs=speechSynthesis.getVoices(), v=vs.find(x=>x.lang.toLowerCase()==="es-ar")||vs.find(x=>x.lang.toLowerCase().startsWith("es"));
+  if(v)u.voice=v; speechSynthesis.speak(u);
+}
 function show(d){
   if(sel&&sel.node)sel.node.scale.set(1,1,1); sel=d; if(!d)return;
   d.node.scale.set(1.12,1.12,1.12);
   const vec=d.con.map(c=>c+(byId[c].tipo==="PC de escritorio"?"":"")).join(", ");
   card.innerHTML=`<h2>${d.id}</h2><dl><dt>Tipo</dt><dd>${d.tipo}</dd><dt>Modelo</dt><dd>${d.modelo}</dd><dt>Red</dt><dd>192.168.0.0</dd><dt>IP</dt><dd>${d.ip||(d.tipo==="Switch"?"Sin IP":"por definir")}</dd>${d.puerto?`<dt>Puerto en Switch0</dt><dd>${d.puerto} (por confirmar)</dd>`:""}<dt>Conectado a</dt><dd>${vec}</dd></dl>${d.desc?`<p class="desc">${d.desc}</p>`:""}`;
-  history.replaceState(null,"","#"+d.id);
+  card.insertAdjacentHTML("beforeend",'<div class="vc"><button id="listen" aria-label="Escuchar la descripción de '+d.id+'">🔊 Escuchar</button><button id="stopv">Detener</button><label><input type="checkbox" id="auto"'+(auto?" checked":"")+'> Leer automáticamente</label></div>');
+  document.getElementById("listen").onclick=()=>speak(d);
+  document.getElementById("stopv").onclick=()=>{if("speechSynthesis" in window)speechSynthesis.cancel();};
+  document.getElementById("auto").onchange=e=>{auto=e.target.checked;};
+  pickSel.value=d.id; history.replaceState(null,"","#"+d.id);
 }
 function choose(e){
   const r=cv.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1),camera);
   const h=ray.intersectObjects(pick)[0]; if(!h)return;
-  let o=h.object; while(o&&!o.userData.dev)o=o.parent; if(o)show(o.userData.dev);
+  let o=h.object; while(o&&!o.userData.dev)o=o.parent; if(o){show(o.userData.dev);if(auto)speak(o.userData.dev);}
 }
 function fromHash(){const d=byId[decodeURIComponent(location.hash.slice(1))];if(d)show(d);}
 addEventListener("hashchange",fromHash); fromHash();
